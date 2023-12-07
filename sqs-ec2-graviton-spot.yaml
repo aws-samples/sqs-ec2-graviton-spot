@@ -107,11 +107,11 @@ Parameters:
   AppInstanceMinVCPUs:
     Type: Number
     MinValue: "0"
-    Default: "0"
+    Default: "1"
   AppInstanceMaxVCPUs:
     Type: Number
     MinValue: "0"
-    Default: "32"
+    Default: "8"
   AppInstanceMinMemoryMiB:
     Type: Number
     MinValue: "0"
@@ -126,13 +126,13 @@ Parameters:
       You can use strings with one or more wild cards, represented by an asterisk (*), to allow an instance type, size, or generation. The following are examples: m6g.8xlarge, c6g.*, m5g.*.
       For example, if you specify c6g*, Amazon EC2 Auto Scaling will allow the entire C6g instance family, which includes all C6gd and C6gn instance types. If you specify c6g.*, Amazon EC2 Auto Scaling will allow all the C6g instance types, but not the C6gn instance types.
     Type: CommaDelimitedList
-    Default: ""
+    Default: "c7g.*,m7g.*,r7g.*"
   ExcludedGravitonAppInstanceTypes:
     Description: >-
       The instance types to exclude. You can use strings with one or more wild cards, represented by an asterisk (*), to exclude an instance family, type, size, or generation. The following are examples: m6g.8xlarge, c6g.*, m5g.*.
       For example, if you specify c6g*, you are excluding the entire C6g instance family, which includes all C6gd and C6gn instance types. If you specify m6g.*, Amazon EC2 Auto Scaling will exclude all the M6g instance types, but not the M6gd instance types.
     Type: CommaDelimitedList
-    Default: "a1.*"
+    Default: ""
   AppInstanceGenerations:
     Description: Indicates whether current or previous generation instance types are included.
     Type: CommaDelimitedList
@@ -356,6 +356,28 @@ Resources:
           - '-'
           - - Ref: AWS::StackName
             - autoScalingGroupPolicy
+      - PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+              - ec2:DescribeVolumes
+              - ec2:DescribeTags
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+              - logs:DescribeLogGroups 
+              - logs:CreateLogStream
+              - logs:CreateLogGroup
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource: arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - CloudWatchAgentServerPolicy
     Type: AWS::IAM::Role
   internetGateway:
     DependsOn:
@@ -392,10 +414,10 @@ Resources:
 
               yum -y install git
 
-              cd /root && git clone https://github.com/rrrazvan/sqs-ec2-spot-asg.git
+              cd /root && git clone https://github.com/rrrazvan/sqs-ec2-graviton-spot.git
 
               REGION=${AWS::Region} S3BUCKET=${s3Bucket} SQSQUEUE=${sqsQueue} CLOUDWATCHLOGSGROUP=${cloudWatchLogsGroup}
-              bash /root/sqs-ec2-spot-asg/user-data.sh
+              bash /root/sqs-ec2-graviton-spot/user-data.sh
 
               '
     Type: AWS::EC2::LaunchTemplate

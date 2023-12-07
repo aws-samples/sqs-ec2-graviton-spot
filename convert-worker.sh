@@ -1,6 +1,6 @@
 #!/bin/bash
 
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+INSTANCE_ID=$(TOKEN=`curl -X PUT -s "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` && curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id -s)
 REGION=%REGION%
 S3BUCKET=%S3BUCKET%
 SQSQUEUE=%SQSQUEUE%
@@ -25,12 +25,12 @@ while sleep 5; do
 
   if [ -z "$RECEIPT" ]; then
 
-    logger "$0: Empty receipt. Something went wrong."
+    echo -e "$0: Empty receipt. Something went wrong."
     continue
 
   fi
 
-  logger "$0: Found $MESSAGES messages in $SQSQUEUE. Details: JSON=$JSON, RECEIPT=$RECEIPT, BODY=$BODY"
+  echo -e "$0: Found $MESSAGES messages in $SQSQUEUE. Details: JSON=$JSON, RECEIPT=$RECEIPT, BODY=$BODY"
 
   INPUT=$(echo "$BODY" | jq -r '.Records[0] | .s3.object.key')
   FNAME=$(echo $INPUT | rev | cut -f2 -d"." | rev | tr '[:upper:]' '[:lower:]')
@@ -38,9 +38,9 @@ while sleep 5; do
 
   if [ "$FEXT" = "jpg" -o "$FEXT" = "png" -o "$FEXT" = "gif" ]; then
 
-    logger "$0: Found work to convert. Details: INPUT=$INPUT, FNAME=$FNAME, FEXT=$FEXT"
+    echo -e "$0: Found work to convert. Details: INPUT=$INPUT, FNAME=$FNAME, FEXT=$FEXT"
 
-    logger "$0: Running: aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --protected-from-scale-in"
+    echo -e "$0: Running: aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --protected-from-scale-in"
 
     aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --protected-from-scale-in
 
@@ -48,9 +48,9 @@ while sleep 5; do
 
     convert /tmp/$INPUT /tmp/$FNAME.pdf
 
-    logger "$0: Convert done. Copying to S3 and cleaning up"
+    echo -e "$0: Convert done. Copying to S3 and cleaning up"
 
-    logger "$0: Running: aws s3 cp /tmp/$FNAME.pdf s3://$S3BUCKET"
+    echo -e "$0: Running: aws s3 cp /tmp/$FNAME.pdf s3://$S3BUCKET"
 
     aws s3 cp /tmp/$FNAME.pdf s3://$S3BUCKET
 
@@ -59,17 +59,17 @@ while sleep 5; do
     # pretend to do work for 60 seconds in order to catch the scale in protection
     sleep 60
 
-    logger "$0: Running: aws sqs --output=json delete-message --queue-url $SQSQUEUE --receipt-handle $RECEIPT"
+    echo -e "$0: Running: aws sqs --output=json delete-message --queue-url $SQSQUEUE --receipt-handle $RECEIPT"
 
     aws sqs --output=json delete-message --queue-url $SQSQUEUE --receipt-handle $RECEIPT
 
-    logger "$0: Running: aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --no-protected-from-scale-in"
+    echo -e "$0: Running: aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --no-protected-from-scale-in"
 
     aws autoscaling set-instance-protection --instance-ids $INSTANCE_ID --auto-scaling-group-name $AUTOSCALINGGROUP --no-protected-from-scale-in
 
   else
 
-    logger "$0: Skipping message - file not of type jpg, png, or gif. Deleting message from queue"
+    echo -e "$0: Skipping message - file not of type jpg, png, or gif. Deleting message from queue"
 
     aws sqs --output=json delete-message --queue-url $SQSQUEUE --receipt-handle $RECEIPT
 
