@@ -1,0 +1,548 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: EC2 Auto Scaling group using EC2 Graviton Spot Instances, scaling based on SQS queue depth
+Mappings:
+  CidrMappings:
+    vpc:
+      CIDR: 10.0.0.0/16
+  AMIRegionMap:
+    ap-northeast-1:
+      AMIID: ami-0eb1fceb47f85a62a
+    ap-northeast-2:
+      AMIID: ami-0c68ab5091e5f073a
+    ap-northeast-3:
+      AMIID: ami-0572255bffbc2c994
+    ap-south-1:
+      AMIID: ami-07d67603110c131fb
+    ap-southeast-1:
+      AMIID: ami-086a02c6a6b50051d
+    ap-southeast-2:
+      AMIID: ami-007ae991b28747ff8
+    ca-central-1:
+      AMIID: ami-0dd3291a0a8660f3f
+    eu-central-1:
+      AMIID: ami-0ba27d9989b7d8c5d
+    eu-north-1:
+      AMIID: ami-081dce9b7a9078540
+    eu-west-1:
+      AMIID: ami-0be5a2a64756744f8
+    eu-west-2:
+      AMIID: ami-0813f1e7ccba6c1b5
+    eu-west-3:
+      AMIID: ami-06b91232079463fd8
+    sa-east-1:
+      AMIID: ami-0667f857f7cb586e6
+    us-east-1:
+      AMIID: ami-04c97e62cb19d53f1
+    us-east-2:
+      AMIID: ami-0090be1905998682a
+    us-west-1:
+      AMIID: ami-0c67f7c8ebad4f2ab
+    us-west-2:
+      AMIID: ami-058a0afa5f1acc977
+Metadata:
+  Author:
+    Description: Razvan Rosu <razvanrc@amazon.com>
+  License:
+    Description: 'Copyright 2019 Amazon.com, Inc. and its affiliates. All Rights Reserved.
+
+      Licensed under the Amazon Software License (the "License"). You may not use this file
+      except in compliance with the License. A copy of the License is located at
+
+      http://aws.amazon.com/asl/
+
+      or in the "license" file accompanying this file. This file is distributed on an "AS IS"
+      BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+      License for the specific language governing permissions and limitations under the License.'
+Outputs:
+  autoScalingGroup:
+    Description: The autoScalingGroup
+    Value:
+      Ref: autoScalingGroup
+  awsRegionId:
+    Description: The AWS Region ID your template was launched in
+    Value:
+      Ref: AWS::Region
+  instanceProfile:
+    Description: Instance profile ARN
+    Value:
+      Fn::GetAtt:
+      - instanceProfile
+      - Arn
+  publicSubnet1:
+    Description: Public subnet 1
+    Value:
+      Ref: publicSubnet1
+  publicSubnet2:
+    Description: Public subnet 2
+    Value:
+      Ref: publicSubnet2
+  s3BucketId:
+    Description: The S3 bucket ID
+    Value:
+      Ref: s3Bucket
+  sqsQueueArn:
+    Description: The SQS queue ARN
+    Value:
+      Fn::GetAtt:
+      - sqsQueue
+      - Arn
+  vpc:
+    Description: The VPC
+    Value:
+      Ref: vpc
+Parameters:
+  desiredCapacity:
+    Default: 1
+    Description: Desired capacity
+    Type: Number
+  maxSize:
+    Default: 4
+    Description: Maximum capacity
+    Type: Number
+  minSize:
+    Default: 1
+    Description: Mininum capacity
+    Type: Number
+  AppInstanceMinVCPUs:
+    Type: Number
+    MinValue: "0"
+    Default: "0"
+  AppInstanceMaxVCPUs:
+    Type: Number
+    MinValue: "0"
+    Default: "32"
+  AppInstanceMinMemoryMiB:
+    Type: Number
+    MinValue: "0"
+    Default: "0"
+  AppInstanceMaxMemoryMiB:
+    Type: Number
+    MinValue: "0"
+    Default: "0"
+  AllowedGravitonAppInstanceTypes:
+    Description: >-
+      The instance types to apply your specified attributes against. All other instance types are ignored, even if they match your specified attributes.
+      You can use strings with one or more wild cards, represented by an asterisk (*), to allow an instance type, size, or generation. The following are examples: m6g.8xlarge, c6g.*, m5g.*.
+      For example, if you specify c6g*, Amazon EC2 Auto Scaling will allow the entire C6g instance family, which includes all C6gd and C6gn instance types. If you specify c6g.*, Amazon EC2 Auto Scaling will allow all the C6g instance types, but not the C6gn instance types.
+    Type: CommaDelimitedList
+    Default: ""
+  ExcludedGravitonAppInstanceTypes:
+    Description: >-
+      The instance types to exclude. You can use strings with one or more wild cards, represented by an asterisk (*), to exclude an instance family, type, size, or generation. The following are examples: m6g.8xlarge, c6g.*, m5g.*.
+      For example, if you specify c6g*, you are excluding the entire C6g instance family, which includes all C6gd and C6gn instance types. If you specify m6g.*, Amazon EC2 Auto Scaling will exclude all the M6g instance types, but not the M6gd instance types.
+    Type: CommaDelimitedList
+    Default: "a1.*"
+  AppInstanceGenerations:
+    Description: Indicates whether current or previous generation instance types are included.
+    Type: CommaDelimitedList
+    Default: "current"
+    AllowedValues: ["current", "previous"]
+
+Conditions:
+  HasMaxMemory: !Not [!Equals [!Ref AppInstanceMaxMemoryMiB, "0"]]
+  HasMaxVCPUs: !Not [!Equals [!Ref AppInstanceMaxVCPUs, "0"]]
+
+  HasAllowedGravitonAppInstanceTypes:
+    !Not [!Equals [!Join ["", !Ref AllowedGravitonAppInstanceTypes], ""]]
+  HasExcludedGravitonAppInstanceTypes:
+    !Not [!Equals [!Join ["", !Ref ExcludedGravitonAppInstanceTypes], ""]]
+Resources:
+  attachGateway:
+    DependsOn:
+    - vpc
+    - internetGateway
+    Properties:
+      InternetGatewayId:
+        Ref: internetGateway
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::VPCGatewayAttachment
+  autoScalingGroup:
+    DependsOn:
+    - launchTemplate
+    - publicSubnet1
+    - publicSubnet2
+    Properties:
+      DesiredCapacity:
+        Ref: desiredCapacity
+      HealthCheckType: EC2
+      MaxSize:
+        Ref: maxSize
+      MinSize:
+        Ref: minSize
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandBaseCapacity: 0
+          OnDemandPercentageAboveBaseCapacity: 0
+          SpotAllocationStrategy: price-capacity-optimized
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId:
+              Ref: launchTemplate
+            Version: 1
+          Overrides:
+            - InstanceRequirements:
+                CpuManufacturers: ["amazon-web-services"] # Graviton/Arm64
+                AllowedInstanceTypes:
+                  !If [
+                    HasAllowedGravitonAppInstanceTypes,
+                    !Ref AllowedGravitonAppInstanceTypes,
+                    !Ref AWS::NoValue,
+                  ]
+                ExcludedInstanceTypes:
+                  !If [
+                    HasExcludedGravitonAppInstanceTypes,
+                    !Ref ExcludedGravitonAppInstanceTypes,
+                    !Ref AWS::NoValue,
+                  ]
+                VCpuCount:
+                  Min: !Ref AppInstanceMinVCPUs
+                  Max:
+                    !If [
+                      HasMaxVCPUs,
+                      !Ref AppInstanceMaxVCPUs,
+                      !Ref AWS::NoValue,
+                    ]
+                MemoryMiB:
+                  Min: !Ref AppInstanceMinMemoryMiB
+                  Max:
+                    !If [
+                      HasMaxMemory,
+                      !Ref AppInstanceMaxMemoryMiB,
+                      !Ref AWS::NoValue,
+                    ]
+                InstanceGenerations: !Ref AppInstanceGenerations
+      VPCZoneIdentifier:
+      - Ref: publicSubnet1
+      - Ref: publicSubnet2
+    Type: AWS::AutoScaling::AutoScalingGroup
+  autoScalingPolicy:
+    DependsOn:
+    - autoScalingGroup
+    - sqsQueue
+    Properties:
+      AutoScalingGroupName:
+        Ref: autoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        CustomizedMetricSpecification:
+          Dimensions:
+          - Name: QueueName
+            Value:
+              Fn::GetAtt:
+              - sqsQueue
+              - QueueName
+          MetricName: ApproximateNumberOfMessagesVisible
+          Namespace: AWS/SQS
+          Statistic: Sum
+          Unit: Count
+        TargetValue: 2
+    Type: AWS::AutoScaling::ScalingPolicy
+  cloudWatchLogsGroup:
+    Properties:
+      RetentionInDays: 7
+    Type: AWS::Logs::LogGroup
+  instanceProfile:
+    DependsOn:
+    - instanceRole
+    Properties:
+      Path: /
+      Roles:
+      - Ref: instanceRole
+    Type: AWS::IAM::InstanceProfile
+  instanceRole:
+    DependsOn:
+    - sqsQueue
+    - s3Bucket
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action: sqs:*
+            Effect: Allow
+            Resource:
+              Fn::GetAtt:
+              - sqsQueue
+              - Arn
+          Version: 2012-10-17
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - sqsQueuePolicy
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogStreams
+            Effect: Allow
+            Resource: arn:aws:logs:*:*:*
+          Version: 2012-10-17
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - cloudWatchLogsPolicy
+      - PolicyDocument:
+          Statement:
+          - Action: s3:ListBucket
+            Effect: Allow
+            Resource:
+            - Fn::Join:
+              - ''
+              - - 'arn:aws:s3:::'
+                - Ref: s3Bucket
+          Version: '2012-10-17'
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - s3BucketListPolicy
+      - PolicyDocument:
+          Statement:
+          - Action: ec2:DescribeTags
+            Effect: Allow
+            Resource: '*'
+          Version: '2012-10-17'
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - ec2DescribeTagsPolicy
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - s3:PutObject*
+            - s3:GetObject
+            - s3:DeleteObject
+            Effect: Allow
+            Resource:
+            - Fn::Join:
+              - ''
+              - - 'arn:aws:s3:::'
+                - Ref: s3Bucket
+                - /*
+          Version: '2012-10-17'
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - s3BucketReadWritePolicy
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - autoscaling:SetInstanceProtection
+            - autoscaling:SetInstanceHealth
+            Effect: Allow
+            Resource: arn:aws:autoscaling:*:*:autoScalingGroup:*:autoScalingGroupName/*
+          Version: '2012-10-17'
+        PolicyName:
+          Fn::Join:
+          - '-'
+          - - Ref: AWS::StackName
+            - autoScalingGroupPolicy
+    Type: AWS::IAM::Role
+  internetGateway:
+    DependsOn:
+    - vpc
+    Type: AWS::EC2::InternetGateway
+  launchTemplate:
+    DependsOn:
+    - instanceProfile
+    - s3Bucket
+    - sqsQueue
+    - cloudWatchLogsGroup
+    Properties:
+      LaunchTemplateData:
+        EbsOptimized: true
+        IamInstanceProfile:
+          Arn:
+            Fn::GetAtt:
+            - instanceProfile
+            - Arn
+        ImageId:
+          Fn::FindInMap:
+          - AMIRegionMap
+          - Ref: AWS::Region
+          - AMIID
+        TagSpecifications:
+        - ResourceType: instance
+          Tags:
+          - Key: Name
+            Value:
+              Ref: AWS::StackName
+        UserData:
+          Fn::Base64:
+            Fn::Sub: '#!/bin/bash -xe
+
+              yum -y install git
+
+              cd /root && git clone https://github.com/rrrazvan/sqs-ec2-spot-asg.git
+
+              REGION=${AWS::Region} S3BUCKET=${s3Bucket} SQSQUEUE=${sqsQueue} CLOUDWATCHLOGSGROUP=${cloudWatchLogsGroup}
+              bash /root/sqs-ec2-spot-asg/user-data.sh
+
+              '
+    Type: AWS::EC2::LaunchTemplate
+  publicRoute:
+    DependsOn:
+    - publicRouteTable
+    - internetGateway
+    - attachGateway
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: internetGateway
+      RouteTableId:
+        Ref: publicRouteTable
+    Type: AWS::EC2::Route
+  publicRouteTable:
+    DependsOn:
+    - vpc
+    - attachGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: Public Route Table
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::RouteTable
+  publicSubnet1:
+    DependsOn:
+    - attachGateway
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 0
+        - Fn::Cidr:
+          - Fn::FindInMap:
+            - CidrMappings
+            - vpc
+            - CIDR
+          - 256
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value:
+          Ref: AWS::StackName
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::Subnet
+  publicSubnet1RouteTableAssociation:
+    DependsOn:
+    - publicRouteTable
+    - publicSubnet1
+    - attachGateway
+    Properties:
+      RouteTableId:
+        Ref: publicRouteTable
+      SubnetId:
+        Ref: publicSubnet1
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  publicSubnet2:
+    DependsOn:
+    - attachGateway
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 1
+        - Fn::Cidr:
+          - Fn::FindInMap:
+            - CidrMappings
+            - vpc
+            - CIDR
+          - 256
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value:
+          Ref: AWS::StackName
+      VpcId:
+        Ref: vpc
+    Type: AWS::EC2::Subnet
+  publicSubnet2RouteTableAssociation:
+    DependsOn:
+    - publicRouteTable
+    - publicSubnet2
+    - attachGateway
+    Properties:
+      RouteTableId:
+        Ref: publicRouteTable
+      SubnetId:
+        Ref: publicSubnet2
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  s3Bucket:
+    DependsOn:
+    - sqsQueue
+    - sqsQueuePolicy
+    Properties:
+      NotificationConfiguration:
+        QueueConfigurations:
+        - Event: s3:ObjectCreated:*
+          Queue:
+            Fn::GetAtt:
+            - sqsQueue
+            - Arn
+    Type: AWS::S3::Bucket
+  sqsQueue:
+    Properties:
+      VisibilityTimeout: 900
+    Type: AWS::SQS::Queue
+  sqsQueuePolicy:
+    DependsOn:
+    - sqsQueue
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - sqs:SendMessage
+          Effect: Allow
+          Principal:
+            Service: s3.amazonaws.com
+          Resource: '*'
+        Version: 2012-10-17
+      Queues:
+      - Ref: sqsQueue
+    Type: AWS::SQS::QueuePolicy
+  vpc:
+    Properties:
+      CidrBlock:
+        Fn::FindInMap:
+        - CidrMappings
+        - vpc
+        - CIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+      - Key: Name
+        Value:
+          Ref: AWS::StackName
+    Type: AWS::EC2::VPC
+...
