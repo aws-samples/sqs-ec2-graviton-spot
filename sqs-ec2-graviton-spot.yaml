@@ -108,22 +108,26 @@ Parameters:
     Default: 1
     Description: Mininum capacity
     Type: Number
-  AppInstanceMinVCPUs:
+  InstanceMinVCPUs:
     Type: Number
     MinValue: "0"
     Default: "1"
-  AppInstanceMaxVCPUs:
+    Description: The minimum number of vCPUs required for your instances
+  InstanceMaxVCPUs:
     Type: Number
     MinValue: "0"
     Default: "8"
-  AppInstanceMinMemoryMiB:
+    Description: The maximum number of vCPUs required for your instances
+  InstanceMinMemoryMiB:
     Type: Number
     MinValue: "0"
     Default: "0"
-  AppInstanceMaxMemoryMiB:
+    Description: The minimum amount of memory in MiB for your instances
+  InstanceMaxMemoryMiB:
     Type: Number
     MinValue: "0"
     Default: "0"
+    Description: The maximum amount of memory in MiB for your instances
   AllowedGravitonAppInstanceTypes:
     Description: >-
       The instance types to apply your specified attributes against. All other instance types are ignored, even if they match your specified attributes.
@@ -144,8 +148,8 @@ Parameters:
     AllowedValues: ["current", "previous"]
 
 Conditions:
-  HasMaxMemory: !Not [!Equals [!Ref AppInstanceMaxMemoryMiB, "0"]]
-  HasMaxVCPUs: !Not [!Equals [!Ref AppInstanceMaxVCPUs, "0"]]
+  HasMaxMemory: !Not [!Equals [!Ref InstanceMaxMemoryMiB, "0"]]
+  HasMaxVCPUs: !Not [!Equals [!Ref InstanceMaxVCPUs, "0"]]
 
   HasAllowedGravitonAppInstanceTypes:
     !Not [!Equals [!Join ["", !Ref AllowedGravitonAppInstanceTypes], ""]]
@@ -153,9 +157,6 @@ Conditions:
     !Not [!Equals [!Join ["", !Ref ExcludedGravitonAppInstanceTypes], ""]]
 Resources:
   attachGateway:
-    DependsOn:
-    - vpc
-    - internetGateway
     Properties:
       InternetGatewayId:
         Ref: internetGateway
@@ -163,10 +164,6 @@ Resources:
         Ref: vpc
     Type: AWS::EC2::VPCGatewayAttachment
   autoScalingGroup:
-    DependsOn:
-    - launchTemplate
-    - publicSubnet1
-    - publicSubnet2
     Properties:
       DesiredCapacity:
         Ref: desiredCapacity
@@ -192,29 +189,29 @@ Resources:
                   !If [
                     HasAllowedGravitonAppInstanceTypes,
                     !Ref AllowedGravitonAppInstanceTypes,
-                    !Ref AWS::NoValue,
+                    !Ref "AWS::NoValue",
                   ]
                 ExcludedInstanceTypes:
                   !If [
                     HasExcludedGravitonAppInstanceTypes,
                     !Ref ExcludedGravitonAppInstanceTypes,
-                    !Ref AWS::NoValue,
+                    !Ref "AWS::NoValue",
                   ]
                 VCpuCount:
-                  Min: !Ref AppInstanceMinVCPUs
+                  Min: !Ref InstanceMinVCPUs
                   Max:
                     !If [
                       HasMaxVCPUs,
-                      !Ref AppInstanceMaxVCPUs,
-                      !Ref AWS::NoValue,
+                      !Ref InstanceMaxVCPUs,
+                      !Ref "AWS::NoValue",
                     ]
                 MemoryMiB:
-                  Min: !Ref AppInstanceMinMemoryMiB
+                  Min: !Ref InstanceMinMemoryMiB
                   Max:
                     !If [
                       HasMaxMemory,
-                      !Ref AppInstanceMaxMemoryMiB,
-                      !Ref AWS::NoValue,
+                      !Ref InstanceMaxMemoryMiB,
+                      !Ref "AWS::NoValue",
                     ]
                 InstanceGenerations: !Ref AppInstanceGenerations
       VPCZoneIdentifier:
@@ -222,9 +219,6 @@ Resources:
       - Ref: publicSubnet2
     Type: AWS::AutoScaling::AutoScalingGroup
   autoScalingPolicy:
-    DependsOn:
-    - autoScalingGroup
-    - sqsQueue
     Properties:
       AutoScalingGroupName:
         Ref: autoScalingGroup
@@ -248,17 +242,12 @@ Resources:
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
   instanceProfile:
-    DependsOn:
-    - instanceRole
     Properties:
       Path: /
       Roles:
       - Ref: instanceRole
     Type: AWS::IAM::InstanceProfile
   instanceRole:
-    DependsOn:
-    - sqsQueue
-    - s3Bucket
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -275,7 +264,23 @@ Resources:
       Policies:
       - PolicyDocument:
           Statement:
-          - Action: sqs:*
+          - Action:
+            - sqs:CancelMessageMoveTask
+            - sqs:ChangeMessageVisibility
+            - sqs:CreateQueue
+            - sqs:DeleteMessage
+            - sqs:DeleteQueue
+            - sqs:PurgeQueue
+            - sqs:SendMessage
+            - sqs:SetQueueAttributes
+            - sqs:StartMessageMoveTask
+            - sqs:GetQueueAttributes
+            - sqs:GetQueueUrl
+            - sqs:ListDeadLetterSourceQueues
+            - sqs:ListMessageMoveTasks
+            - sqs:ListQueues
+            - sqs:ListQueueTags
+            - sqs:ReceiveMessage
             Effect: Allow
             Resource:
               Fn::GetAtt:
@@ -384,15 +389,8 @@ Resources:
             - CloudWatchAgentServerPolicy
     Type: AWS::IAM::Role
   internetGateway:
-    DependsOn:
-    - vpc
     Type: AWS::EC2::InternetGateway
   launchTemplate:
-    DependsOn:
-    - instanceProfile
-    - s3Bucket
-    - sqsQueue
-    - cloudWatchLogsGroup
     Properties:
       LaunchTemplateData:
         EbsOptimized: true
@@ -426,10 +424,6 @@ Resources:
               '
     Type: AWS::EC2::LaunchTemplate
   publicRoute:
-    DependsOn:
-    - publicRouteTable
-    - internetGateway
-    - attachGateway
     Properties:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId:
@@ -438,9 +432,6 @@ Resources:
         Ref: publicRouteTable
     Type: AWS::EC2::Route
   publicRouteTable:
-    DependsOn:
-    - vpc
-    - attachGateway
     Properties:
       Tags:
       - Key: Name
@@ -449,8 +440,6 @@ Resources:
         Ref: vpc
     Type: AWS::EC2::RouteTable
   publicSubnet1:
-    DependsOn:
-    - attachGateway
     Properties:
       AvailabilityZone:
         Fn::Select:
@@ -476,10 +465,6 @@ Resources:
         Ref: vpc
     Type: AWS::EC2::Subnet
   publicSubnet1RouteTableAssociation:
-    DependsOn:
-    - publicRouteTable
-    - publicSubnet1
-    - attachGateway
     Properties:
       RouteTableId:
         Ref: publicRouteTable
@@ -487,8 +472,6 @@ Resources:
         Ref: publicSubnet1
     Type: AWS::EC2::SubnetRouteTableAssociation
   publicSubnet2:
-    DependsOn:
-    - attachGateway
     Properties:
       AvailabilityZone:
         Fn::Select:
@@ -514,10 +497,6 @@ Resources:
         Ref: vpc
     Type: AWS::EC2::Subnet
   publicSubnet2RouteTableAssociation:
-    DependsOn:
-    - publicRouteTable
-    - publicSubnet2
-    - attachGateway
     Properties:
       RouteTableId:
         Ref: publicRouteTable
@@ -525,9 +504,6 @@ Resources:
         Ref: publicSubnet2
     Type: AWS::EC2::SubnetRouteTableAssociation
   s3Bucket:
-    DependsOn:
-    - sqsQueue
-    - sqsQueuePolicy
     Properties:
       NotificationConfiguration:
         QueueConfigurations:
@@ -542,8 +518,6 @@ Resources:
       VisibilityTimeout: 900
     Type: AWS::SQS::Queue
   sqsQueuePolicy:
-    DependsOn:
-    - sqsQueue
     Properties:
       PolicyDocument:
         Statement:
