@@ -42,6 +42,15 @@ You can deploy the resources using the default parameters or modify them accordi
 ## Step 3 - Testing the solution
 The stack includes an Amazon Simple Storage Service (S3) bucket with a CloudWatch trigger to push notifications to an SQS queue after an image is uploaded to the Amazon S3 bucket. The scope is to convert the `jpg` image to `pdf`. Once the message is in the queue, it is picked up by the application running on the EC2 instances in the Auto Scaling group. The EC2 instances are using sustainable and efficient Graviton processors. Moreover, this setup will leverage EC2 Spot instances. The image is converted to `pdf`, and the instance is protected from scale-in for as long as it has an active processing job. After the workload has been successful processed, the Auto Scaling group will reduce the number of workers, thus reducing energy waste, lower costs, and minimize environmental footprints.
 
+We will use the `ApproximateNumberOfMessagesVisible` CloudWatch metric of the `AWS/SQS`
+namespace to take a scaling out/in decision based on the number of messages to be processed. In the following screenshot you can see how uploading multiple photos in the S3 bucket has triggered the metric alarm to transition from *Insufficient data* to *In alarm* and finally to *OK* as the workload has been processed.
+
+![ApproximateNumberOfMessagesVisible](/images/ApproximateNumberOfMessagesVisible.jpg)
+
+We will continue to implement a sustainable approach by deploying our AWS Graviton based queue workers using [attribute-based instance type selection](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html) - the amount of memory and computing power that we need for the workload planned to run on the instances. Among others, this strategy has the advantage of simplifying the instance type selection process. Notice the `CpuManufacturers` option. Moreover, we will utilize conditions like `AllowedInstanceTypes` and `ExcludedInstanceTypes` to select or avoid entire instance families. This is implemented in the CloudFormation template included in this repository.
+
+![InstanceRequirements](/images/InstanceRequirements.jpg)
+
 ## Step 4 - Conclusions and cleanup
 This workshop demonstrates how to architect fault tolerant worker tiers in a sustainable way. If your queue worker tiers and workload needs are fault tolerant, you can increase your application’s efficiency and sustainability by implementing a queue-driven design. The main best practices covered in this lab are:
 
