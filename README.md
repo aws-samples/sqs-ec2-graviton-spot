@@ -1,4 +1,4 @@
-## Event-driven architecture with Graviton and Spot
+## [Event-driven architecture with AWS Graviton Processors and Amazon EC2 Spot Instances](https://catalog.workshops.aws/well-architected-sustainability/en-US/2-software-and-architecture/event-driven-architecture-with-graviton-spot)
 
 This is a sample application that demonstrates how to build a sustainable architecture pattern according to the [AWS Well-Architected Sustainability Pillar](https://docs.aws.amazon.com/wellarchitected/latest/sustainability-pillar/best-practices-for-sustainability-in-the-cloud.html) using the following services:
 
